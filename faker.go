@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bxcodec/faker/v3/support/slice"
+	"github.com/LalithSrinivas/faker/support/slice"
 )
 
 var (
@@ -30,9 +30,9 @@ var (
 	//Sets the boundary for random float value generation. Boundaries should comply with float values constraints (IEEE 754)
 	fBoundary = floatBoundary{start: 0, end: 100}
 	//Sets the random max size for slices and maps.
-	randomMaxSize = 100
+	randomMaxSize = 10
 	//Sets the random min size for slices and maps.
-	randomMinSize = 0
+	randomMinSize = 5
 	// Sets the single fake data generator to generate unique values
 	generateUniqueValues = false
 	// Sets whether interface{}s should be ignored.

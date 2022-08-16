@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/bxcodec/faker/v3/support/slice"
+	"github.com/LalithSrinivas/faker/support/slice"
 )
 
 var phone Phoner
