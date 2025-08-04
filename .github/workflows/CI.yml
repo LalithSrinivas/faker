@@ -55,6 +55,9 @@ jobs:
       actions:       read  # to download code coverage results from "test" job
       pull-requests: write # write permission needed to comment on PR
     steps:
+      - name: ENV Export
+        run: |
+          echo "TARGET_BRANCH=${{ env.TARGET_BRANCH }}" >> $GITHUB_ENV
       - uses: fgrosse/go-coverage-report@v1.2.0 # Consider using a Git revision for maximum security
         with:
           coverage-artifact-name: "code-coverage" # can be omitted if you used this default value
