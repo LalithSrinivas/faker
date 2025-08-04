@@ -1,5 +1,4 @@
 package faker_test
-
 import (
 	"fmt"
 
