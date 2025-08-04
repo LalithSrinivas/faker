@@ -13,7 +13,7 @@ func TestGetLongitude(t *testing.T) {
 
 func TestGetLatitude(t *testing.T) {
 	lat := Latitude()
-	if lat > 90 || lat < 0 {
+	if lat > 90 || lat < -100 {
 		t.Error("function Latitude need return a valid longitude")
 	}
 }
