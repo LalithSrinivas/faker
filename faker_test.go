@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	fakerErrors "github.com/bxcodec/faker/v4/pkg/errors"
+	"github.com/bxcodec/faker/v4/pkg/interfaces"
+	"github.com/bxcodec/faker/v4/pkg/options"
 )
 
 const (
@@ -24,14 +28,21 @@ const (
 )
 
 var (
-	langCorrectTagsMap = map[string]langRuneBoundary{"lang=eng": LangENG, "lang=chi": LangCHI, "lang=rus": LangRUS, "lang=jpn": LangJPN, "lang=kor": LangKOR, "lang=emj": EmotEMJ}
-	langUncorrectTags  = [3]string{"lang=", "lang", "lng=eng"}
+	langCorrectTagsMap = map[string]interfaces.LangRuneBoundary{"lang=eng": interfaces.LangENG,
+		"lang=chi": interfaces.LangCHI, "lang=rus": interfaces.LangRUS, "lang=jpn": interfaces.LangJPN,
+		"lang=kor": interfaces.LangKOR, "lang=emj": interfaces.EmotEMJ}
+	langUncorrectTags = [3]string{"lang=", "lang", "lng=eng"}
 
 	lenCorrectTags   = [3]string{"len=4", "len=5", "len=10"}
 	lenUncorrectTags = [6]string{"len=b", "ln=10", "length=25", "lang=b", "ln=10", "lang=8d,,len=eng"}
 
 	sliceLenCorrectTags   = [4]string{"slice_len=0", "slice_len=4", "slice_len=5", "slice_len=10"}
 	sliceLenIncorrectTags = [3]string{"slice_len=b", "slice_len=-1", "slice_len=-10"}
+
+	//Sets the random max size for slices and maps.
+	randomMaxSize = 100
+	//Sets the random min size for slices and maps.
+	randomMinSize = 0
 )
 
 type Coupon struct {
@@ -409,8 +420,11 @@ func TestUnsuportedMapStringInterface(t *testing.T) {
 		Map map[string]interface{}
 	}
 	var sample = new(Sample)
-	if err := FakeData(sample); err == nil {
+	if err := FakeData(sample, options.WithRandomMapAndSliceMinSize(1)); err == nil {
 		t.Error("Expected Error. But got nil")
+	}
+	if err := FakeData(sample, options.WithRandomMapAndSliceMaxSize(1)); err != nil {
+		t.Errorf("Expected nil. But got error: %+v", err) // empty map
 	}
 }
 
@@ -460,12 +474,16 @@ func TestSetDataErrorDataParseTagIntType(t *testing.T) {
 
 func TestSetRandomStringLength(t *testing.T) {
 	someStruct := SomeStruct{}
-	if err := SetRandomStringLength(-1); err == nil {
-		t.Error("Random string len must not accept lower than 0 as a size")
-	}
 	strLen := 5
+	if err := FakeData(&someStruct, options.WithRandomStringLength(uint(strLen))); err != nil {
+		t.Error("Fake data generation has failed")
+	}
+	if utfLen(someStruct.StringValue) > strLen {
+		t.Error("SetRandomStringLength did not work.")
+	}
+	strLen = 1
 	if err := SetRandomStringLength(strLen); err != nil {
-		t.Error("SetRandomStringLength method is corrupted.")
+		t.Error("Fake data generation has failed")
 	}
 	if err := FakeData(&someStruct); err != nil {
 		t.Error("Fake data generation has failed")
@@ -477,7 +495,13 @@ func TestSetRandomStringLength(t *testing.T) {
 
 func TestSetStringLang(t *testing.T) {
 	someStruct := SomeStruct{}
-	SetStringLang(LangENG)
+	// optionsSetStringLang(LangENG)
+	if err := FakeData(&someStruct, options.WithStringLanguage(interfaces.LangENG)); err != nil {
+		t.Error("Fake data generation has failed")
+	}
+
+	someStruct = SomeStruct{}
+	SetStringLang(interfaces.LangENG)
 	if err := FakeData(&someStruct); err != nil {
 		t.Error("Fake data generation has failed")
 	}
@@ -485,27 +509,46 @@ func TestSetStringLang(t *testing.T) {
 
 func TestSetRandomNumberBoundaries(t *testing.T) {
 	someStruct := SomeStruct{}
+	boundary := interfaces.RandomIntegerBoundary{Start: 10, End: 90}
+	if err := FakeData(&someStruct, options.WithRandomIntegerBoundaries(boundary)); err != nil {
+		t.Error("Fake data generation has failed")
+	}
+
+	if someStruct.Inta >= boundary.End || someStruct.Inta < boundary.Start {
+		t.Errorf("%d must be between [%d,%d)", someStruct.Inta, boundary.Start, boundary.End)
+	}
+
+	someStruct = SomeStruct{}
 	if err := SetRandomNumberBoundaries(10, 0); err == nil {
 		t.Error("Start must be smaller than end value")
 	}
-	boundary := intBoundary{start: 10, end: 90}
-	if err := SetRandomNumberBoundaries(boundary.start, boundary.end); err != nil {
+	boundary = interfaces.RandomIntegerBoundary{Start: 10, End: 90}
+	if err := SetRandomNumberBoundaries(boundary.Start, boundary.End); err != nil {
 		t.Error("SetRandomNumberBoundaries method is corrupted.")
 	}
 	if err := FakeData(&someStruct); err != nil {
 		t.Error("Fake data generation has failed")
 	}
-	if someStruct.Inta >= boundary.end || someStruct.Inta < boundary.start {
-		t.Errorf("%d must be between [%d,%d)", someStruct.Inta, boundary.start, boundary.end)
+	if someStruct.Inta >= boundary.End || someStruct.Inta < boundary.Start {
+		t.Errorf("%d must be between [%d,%d)", someStruct.Inta, boundary.Start, boundary.End)
 	}
 }
 
 func TestSetRandomMapAndSliceSize(t *testing.T) {
 	someStruct := SomeStruct{}
+	size := 2
+	if err := FakeData(&someStruct, options.WithRandomMapAndSliceMaxSize(uint(size))); err != nil {
+		t.Error("Fake data generation has failed")
+	}
+	if len(someStruct.MapStringStruct) > size || len(someStruct.SBool) > size {
+		t.Error("SetRandomMapAndSliceSize did not work.")
+	}
+
+	someStruct = SomeStruct{}
 	if err := SetRandomMapAndSliceSize(-1); err == nil {
 		t.Error("Random Map and Slice must not accept lower than 0 as a size")
 	}
-	size := 5
+	size = 5
 	if err := SetRandomMapAndSliceSize(size); err != nil {
 		t.Error("SetRandomMapAndSliceSize method is corrupted.")
 	}
@@ -519,9 +562,8 @@ func TestSetRandomMapAndSliceSize(t *testing.T) {
 
 func TestSetNilIfLenIsZero(t *testing.T) {
 	someStruct := SomeStruct{}
-	SetNilIfLenIsZero(true)
-	testRandZero = true
-	if err := FakeData(&someStruct); err != nil {
+	// testRandZero = true
+	if err := FakeData(&someStruct, options.WithNilIfLenIsZero(true), options.WithSliceMapRandomToZero(true)); err != nil {
 		t.Error("Fake data generation has failed")
 	}
 	if someStruct.MapStringString != nil && someStruct.MapStringStruct != nil &&
@@ -531,12 +573,19 @@ func TestSetNilIfLenIsZero(t *testing.T) {
 	if someStruct.Stime != nil && someStruct.SBool != nil {
 		t.Error("Array has to be nil")
 	}
-	testRandZero = false
 }
 
 func TestSetIgnoreInterface(t *testing.T) {
-	SetIgnoreInterface(false)
 	var someInterface interface{}
+	if err := FakeData(&someInterface, options.WithIgnoreInterface(false)); err == nil {
+		t.Error("Fake data generation didn't fail on interface{}")
+	}
+	if err := FakeData(&someInterface, options.WithIgnoreInterface(true)); err != nil {
+		t.Error("Fake data generation fail on interface{} with SetIgnoreInterface(true)")
+	}
+
+	someInterface = nil
+	SetIgnoreInterface(false)
 	if err := FakeData(&someInterface); err == nil {
 		t.Error("Fake data generation didn't fail on interface{}")
 	}
@@ -634,32 +683,32 @@ func TestLang(t *testing.T) {
 	}
 
 	var err error
-	err = isStringLangCorrect(someStruct.ValueENG, LangENG)
+	err = isStringLangCorrect(someStruct.ValueENG, interfaces.LangENG)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	err = isStringLangCorrect(someStruct.ValueRUS, LangRUS)
+	err = isStringLangCorrect(someStruct.ValueRUS, interfaces.LangRUS)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	err = isStringLangCorrect(someStruct.ValueCHI, LangCHI)
+	err = isStringLangCorrect(someStruct.ValueCHI, interfaces.LangCHI)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	err = isStringLangCorrect(someStruct.ValueJPN, LangJPN)
+	err = isStringLangCorrect(someStruct.ValueJPN, interfaces.LangJPN)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	err = isStringLangCorrect(someStruct.ValueKOR, LangKOR)
+	err = isStringLangCorrect(someStruct.ValueKOR, interfaces.LangKOR)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	err = isStringLangCorrect(someStruct.ValueEMJ, EmotEMJ)
+	err = isStringLangCorrect(someStruct.ValueEMJ, interfaces.EmotEMJ)
 	if err != nil {
 		t.Error(err.Error())
 	}
 
-	err = isStringLangCorrect(someStruct.ValueWithUndefinedLang, LangENG)
+	err = isStringLangCorrect(someStruct.ValueWithUndefinedLang, interfaces.LangENG)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -680,7 +729,7 @@ func TestLangWithWrongLang(t *testing.T) {
 
 func TestExtractingLangFromTag(t *testing.T) {
 	var err error
-	var lng *langRuneBoundary
+	var lng *interfaces.LangRuneBoundary
 	for k, v := range langCorrectTagsMap {
 		if lng, err = extractLangFromTag(k); err != nil {
 			t.Error(err.Error())
@@ -699,12 +748,12 @@ func TestExtractingLangFromTag(t *testing.T) {
 
 func TestExtractingStringFromTag(t *testing.T) {
 	for _, tag := range lenCorrectTags {
-		if _, err := extractStringFromTag(tag); err != nil {
+		if _, err := extractStringFromTag(tag, *options.DefaultOption()); err != nil {
 			t.Error(err.Error())
 		}
 	}
 	for _, tag := range lenUncorrectTags {
-		if _, err := extractStringFromTag(tag); err == nil {
+		if _, err := extractStringFromTag(tag, *options.DefaultOption()); err == nil {
 			t.Error(err.Error())
 		}
 	}
@@ -747,12 +796,12 @@ func TestWrongSliceLen(t *testing.T) {
 
 func TestExtractingSliceLenFromTag(t *testing.T) {
 	for _, tag := range sliceLenCorrectTags {
-		if _, err := extractSliceLengthFromTag(tag); err != nil {
+		if _, err := extractSliceLengthFromTag(tag, *options.DefaultOption()); err != nil {
 			t.Error(err.Error())
 		}
 	}
 	for _, tag := range sliceLenIncorrectTags {
-		if _, err := extractSliceLengthFromTag(tag); err == nil {
+		if _, err := extractSliceLengthFromTag(tag, *options.DefaultOption()); err == nil {
 			t.Errorf("Extracting should have thrown an error for tag %s", tag)
 		}
 	}
@@ -765,7 +814,7 @@ func TestLangWithLen(t *testing.T) {
 	}
 
 	var err error
-	err = isStringLangCorrect(someStruct.ValueENG, LangENG)
+	err = isStringLangCorrect(someStruct.ValueENG, interfaces.LangENG)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -774,7 +823,7 @@ func TestLangWithLen(t *testing.T) {
 		t.Errorf("Got %d, but expected to be %d as a string len", engLen, someStructWithLenAndLangENG)
 	}
 
-	err = isStringLangCorrect(someStruct.ValueRUS, LangRUS)
+	err = isStringLangCorrect(someStruct.ValueRUS, interfaces.LangRUS)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -783,7 +832,7 @@ func TestLangWithLen(t *testing.T) {
 		t.Errorf("Got %d, but expected to be %d as a string len", chiLen, someStructWithLenAndLangCHI)
 	}
 
-	err = isStringLangCorrect(someStruct.ValueCHI, LangCHI)
+	err = isStringLangCorrect(someStruct.ValueCHI, interfaces.LangCHI)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -792,7 +841,7 @@ func TestLangWithLen(t *testing.T) {
 		t.Errorf("Got %d, but expected to be %d as a string len", rusLen, someStructWithLenAndLangRUS)
 	}
 
-	err = isStringLangCorrect(someStruct.ValueJPN, LangJPN)
+	err = isStringLangCorrect(someStruct.ValueJPN, interfaces.LangJPN)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -801,7 +850,7 @@ func TestLangWithLen(t *testing.T) {
 		t.Errorf("Got %d, but expected to be %d as a string len", jpnLen, someStructWithLenAndLangJPN)
 	}
 
-	err = isStringLangCorrect(someStruct.ValueKOR, LangKOR)
+	err = isStringLangCorrect(someStruct.ValueKOR, interfaces.LangKOR)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -810,7 +859,7 @@ func TestLangWithLen(t *testing.T) {
 		t.Errorf("Got %d, but expected to be %d as a string len", korLen, someStructWithLenAndLangKOR)
 	}
 
-	err = isStringLangCorrect(someStruct.ValueEMJ, EmotEMJ)
+	err = isStringLangCorrect(someStruct.ValueEMJ, interfaces.EmotEMJ)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -820,11 +869,11 @@ func TestLangWithLen(t *testing.T) {
 	}
 }
 
-func isStringLangCorrect(value string, lang langRuneBoundary) error {
+func isStringLangCorrect(value string, lang interfaces.LangRuneBoundary) error {
 	for i := 0; i < len(value); {
 		r, size := utf8.DecodeLastRuneInString(value[i:])
-		if r < lang.start || r > lang.end {
-			return fmt.Errorf("Symbol is not in selected alphabet: start: %d, end: %d", lang.start, lang.end)
+		if r < lang.Start || r > lang.End {
+			return fmt.Errorf("Symbol is not in selected alphabet: start: %d, end: %d", lang.Start, lang.End)
 		}
 		i += size
 	}
@@ -898,7 +947,7 @@ func validateFloatRange(value float64) error {
 
 func TestSetDataWithTagIfFirstArgumentNotPtr(t *testing.T) {
 	temp := struct{}{}
-	if setDataWithTag(reflect.ValueOf(temp), "").Error() != "Not a pointer value" {
+	if setDataWithTag(reflect.ValueOf(temp), "", *options.DefaultOption()).Error() != "Not a pointer value" {
 		t.Error("Expected in arguments not ptr")
 	}
 }
@@ -941,8 +990,19 @@ func TestRandomIntOnlySecondParameters(t *testing.T) {
 }
 
 func TestRandomIntThreeParameters(t *testing.T) {
+	if res, err := RandomInt(1, 2, 3); err != nil {
+		t.Fatal(err)
+	} else if len(res) != 2 {
+		t.Fatalf("expect 2 numbers, got %d", len(res))
+	}
+	if res, err := RandomInt(1, 10, 3); err != nil {
+		t.Fatal(err)
+	} else if len(res) != 3 {
+		t.Fatalf("expect 3 numbers, got %d", len(res))
+	}
+
 	first := rand.Intn(50)
-	second := rand.Intn(100) + first
+	second := rand.Intn(100) + first + 5 // at least 5 numbers
 	third := rand.Intn(5)
 	res, _ := RandomInt(first, second, third)
 	if len(res) != (third) {
@@ -962,7 +1022,7 @@ func TestRandomIntThreeParameters(t *testing.T) {
 func TestRandomIntOnlyError(t *testing.T) {
 	arguments := []int{1, 3, 4, 5, 6}
 	_, err := RandomInt(arguments...)
-	if err == nil && err.Error() == fmt.Errorf(ErrMoreArguments, len(arguments)).Error() {
+	if err == nil && err.Error() == fmt.Errorf(fakerErrors.ErrMoreArguments, len(arguments)).Error() {
 		t.Error("Expected error from function RandomInt")
 	}
 }
@@ -1216,7 +1276,7 @@ func TestTagAlreadyExists(t *testing.T) {
 		return nil, nil
 	})
 
-	if err == nil || err.Error() != ErrTagAlreadyExists {
+	if err == nil || err.Error() != fakerErrors.ErrTagAlreadyExists {
 		t.Error("Expected ErrTagAlreadyExists Error,  But Got: ", err)
 	}
 }
@@ -1238,7 +1298,7 @@ func TestRemoveProvider(t *testing.T) {
 func TestTagDoesNotExist(t *testing.T) {
 	err := RemoveProvider("not_existing_test_tag")
 
-	if err == nil || err.Error() != ErrTagDoesNotExist {
+	if err == nil || err.Error() != fakerErrors.ErrTagDoesNotExist {
 		t.Error("Expected ErrTagDoesNotExist Error,  But Got: ", err)
 	}
 }
@@ -1705,7 +1765,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrNotEnoughTagArguments
+		expected := fakerErrors.ErrNotEnoughTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1722,7 +1782,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1739,7 +1799,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Fatal("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1756,7 +1816,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Fatal("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrDuplicateSeparator
+		expected := fakerErrors.ErrDuplicateSeparator
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1774,7 +1834,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			return
 		}
 		actual := err.Error()
-		expected := ErrNotEnoughTagArguments
+		expected := fakerErrors.ErrNotEnoughTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1791,7 +1851,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1808,7 +1868,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Fatal("expected error, but got no error", err)
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1825,7 +1885,7 @@ func TestOneOfTag__BadInputsForFloats(t *testing.T) {
 			t.Fatal("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrDuplicateSeparator
+		expected := fakerErrors.ErrDuplicateSeparator
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1846,7 +1906,7 @@ func TestOneOfTag__BadInputsForStrings(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrNotEnoughTagArguments
+		expected := fakerErrors.ErrNotEnoughTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1863,7 +1923,7 @@ func TestOneOfTag__BadInputsForStrings(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1880,7 +1940,7 @@ func TestOneOfTag__BadInputsForStrings(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1897,7 +1957,7 @@ func TestOneOfTag__BadInputsForStrings(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrDuplicateSeparator
+		expected := fakerErrors.ErrDuplicateSeparator
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -1919,7 +1979,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -1936,7 +1996,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -1953,7 +2013,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -1970,7 +2030,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -1987,7 +2047,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -2004,7 +2064,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -2021,7 +2081,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -2038,7 +2098,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -2056,7 +2116,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrNotEnoughTagArguments
+		expected := fakerErrors.ErrNotEnoughTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -2073,7 +2133,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 			t.Errorf("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -2090,7 +2150,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 			t.Fatal("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -2107,7 +2167,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 			t.Fatal("expected error, but got no error")
 		}
 		actual := err.Error()
-		expected := ErrDuplicateSeparator
+		expected := fakerErrors.ErrDuplicateSeparator
 		if actual != expected {
 			t.Errorf("expected %v, but got %v", expected, actual)
 		}
@@ -2123,7 +2183,7 @@ func TestOneOfTag__BadInputsForInts(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
-		expected := ErrUnsupportedTagArguments
+		expected := fakerErrors.ErrUnsupportedTagArguments
 		actual := err.Error()
 		if expected != actual {
 			t.Errorf("expected %v but got %v", expected, actual)
@@ -2164,6 +2224,30 @@ func TestRandomMaxMinMapSliceSize(t *testing.T) {
 	type SliceMap struct {
 		Slice []int
 		Map   map[string]int
+	}
+
+	for _, c := range []struct {
+		max, min, expect int
+	}{
+		{2, 1, 1}, // [1,2) => always 1
+		{2, 2, 2},
+		{2, 3, 3}, // if min >= max, result will always be min
+	} {
+
+		s := SliceMap{}
+		err := FakeData(&s, options.WithRandomMapAndSliceMaxSize(uint(c.max)),
+			options.WithRandomMapAndSliceMinSize(uint(c.min)))
+		if err != nil {
+			t.Error(err)
+		}
+
+		if len(s.Map) != c.expect {
+			t.Errorf("map (len:%d) not expect length with test case %+v\n", len(s.Map), c)
+		}
+
+		if len(s.Slice) != c.expect {
+			t.Errorf("slice (len:%d) not expect length with test case %+v\n", len(s.Slice), c)
+		}
 	}
 
 	orimax, orimin := randomMaxSize, randomMinSize
@@ -2218,20 +2302,9 @@ func TestRandomMapSliceSize(t *testing.T) {
 		Map   map[string]int
 	}
 	expect := 5
-	orimax := randomMaxSize
-	defer func() {
-		err := SetRandomMapAndSliceSize(orimax)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}()
-	err := SetRandomMapAndSliceSize(expect)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for i := 0; i < 10; i++ {
 		s := SliceMap{}
-		err := FakeData(&s)
+		err := FakeData(&s, options.WithRandomMapAndSliceMaxSize(uint(expect)))
 		if err != nil {
 			t.Error(err)
 		}
@@ -2248,7 +2321,7 @@ func TestRandomMapSliceSize(t *testing.T) {
 
 func TestWithFieldsToIgnore(t *testing.T) {
 	a := AStruct{}
-	if err := FakeData(&a, WithFieldsToIgnore("Height", "Name")); err != nil {
+	if err := FakeData(&a, options.WithFieldsToIgnore("Height", "Name")); err != nil {
 		t.Error(err)
 	}
 
@@ -2268,10 +2341,10 @@ func TestWithFieldProvider(t *testing.T) {
 	const heightVal = int64(123)
 	const nameVal = "some string"
 	if err := FakeData(&a,
-		WithCustomFieldProvider("Height", func() (interface{}, error) {
+		options.WithCustomFieldProvider("Height", func() (interface{}, error) {
 			return heightVal, nil
 		}),
-		WithCustomFieldProvider("Name", func() (interface{}, error) {
+		options.WithCustomFieldProvider("Name", func() (interface{}, error) {
 			return nameVal, nil
 		}),
 	); err != nil {
@@ -2286,9 +2359,80 @@ func TestWithFieldProvider(t *testing.T) {
 	}
 
 	// when provider fails
-	if err := FakeData(&a, WithCustomFieldProvider("Height", func() (interface{}, error) {
+	if err := FakeData(&a, options.WithCustomFieldProvider("Height", func() (interface{}, error) {
 		return nil, fmt.Errorf("test")
 	})); err == nil {
 		t.Errorf("expected an error, but got nil")
+	}
+}
+
+type BinaryTreeNode struct {
+	Val   int
+	Left  *BinaryTreeNode
+	Right *BinaryTreeNode
+}
+
+type GeneralTreeNode struct {
+	Val      int
+	Children []*GeneralTreeNode
+}
+
+func TestFakeData_RecursiveType(t *testing.T) {
+	flatTree := func(root *BinaryTreeNode) []*BinaryTreeNode {
+		if root == nil {
+			return nil
+		}
+		ans := []*BinaryTreeNode{root}
+		for i := 0; i < len(ans); i++ {
+			if ans[i].Left != nil {
+				ans = append(ans, ans[i].Left)
+			}
+			if ans[i].Right != nil {
+				ans = append(ans, ans[i].Right)
+			}
+		}
+		return ans
+	}
+	// depth 1
+	var root *BinaryTreeNode
+	if err := FakeData(&root); err != nil {
+		t.Errorf("%+v", err)
+		t.FailNow()
+	}
+	nodes := flatTree(root)
+	if len(nodes) != 3 {
+		t.Errorf("expect 3 node, got %d", len(nodes))
+		t.FailNow()
+	}
+	if root == nil || root.Left == nil || root.Left.Left != nil {
+		t.Errorf("expect depth: 1")
+		t.FailNow()
+	}
+	// depth 0
+	root = nil
+	if err := FakeData(&root, options.WithRecursionMaxDepth(0)); err != nil {
+		t.Errorf("%+v", err)
+		t.FailNow()
+	}
+	if root == nil || root.Left != nil || root.Right != nil {
+		t.Errorf("expect depth: 0")
+		t.FailNow()
+	}
+
+	// depth 0
+	var root2 *GeneralTreeNode
+	if err := FakeData(&root2, options.WithRecursionMaxDepth(0)); err != nil {
+		t.Errorf("%+v", err)
+		t.FailNow()
+	}
+	if root2 == nil {
+		t.Errorf("empty root")
+		t.FailNow()
+	}
+	for _, child := range root2.Children {
+		if child != nil {
+			t.Errorf("expect depth: 0")
+			t.FailNow()
+		}
 	}
 }

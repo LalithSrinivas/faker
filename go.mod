@@ -1,4 +1,5 @@
-module github.com/LalithSrinivas/faker
+// Deprecated: use github.com/go-faker/faker/v4 instead.
+module github.com/bxcodec/faker/v4
 
 go 1.17
 
