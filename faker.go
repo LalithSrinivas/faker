@@ -538,6 +538,624 @@ func getFakedValue(a interface{}, opts *options.Options) (reflect.Value, error) 
 
 }
 
+func getFakedValue2(a interface{}, opts *options.Options) (reflect.Value, error) {
+	t := reflect.TypeOf(a)
+	if t == nil {
+		if opts.IgnoreInterface {
+			return reflect.New(reflect.TypeOf(reflect.Struct)), nil
+		}
+		return reflect.Value{}, fmt.Errorf("interface{} not allowed")
+	}
+	if opts.MaxDepthOption.RecursionOutOfLimit(t) {
+		return reflect.Zero(t), nil
+	}
+	opts.MaxDepthOption.RememberType(t)
+	defer func() {
+		opts.MaxDepthOption.ForgetType(t)
+	}()
+	k := t.Kind()
+
+	switch k {
+	case reflect.Ptr:
+		v := reflect.New(t.Elem())
+		var val reflect.Value
+		var err error
+		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
+			val, err = getFakedValue(reflect.ValueOf(a).Elem().Interface(), opts)
+		} else {
+			val, err = getFakedValue(v.Elem().Interface(), opts)
+		}
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		v.Elem().Set(val.Convert(t.Elem()))
+		return v, nil
+	case reflect.Struct:
+		switch t.String() {
+		case "time.Time":
+			ft := time.Now().Add(time.Duration(rand.Int63()))
+			return reflect.ValueOf(ft), nil
+		default:
+			originalDataVal := reflect.ValueOf(a)
+			v := reflect.New(t).Elem()
+			retry := 0 // error if cannot generate unique value after maxRetry tries
+			for i := 0; i < v.NumField(); i++ {
+				if !v.Field(i).CanSet() {
+					continue // to avoid panic to set on unexported field in struct
+				}
+
+				if _, ok := opts.IgnoreFields[t.Field(i).Name]; ok {
+					continue
+				}
+
+				if p, ok := opts.FieldProviders[t.Field(i).Name]; ok {
+					val, err := p()
+					if err != nil {
+						return reflect.Value{}, fmt.Errorf("custom provider for field %s: %w", t.Field(i).Name, err)
+					}
+					v.Field(i).Set(reflect.ValueOf(val))
+					continue
+				}
+
+				tags := decodeTags(t, i)
+				switch {
+				case tags.keepOriginal:
+					zero, err := isZero(reflect.ValueOf(a).Field(i))
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					if zero {
+						err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+						if err != nil {
+							return reflect.Value{}, err
+						}
+						continue
+					}
+					v.Field(i).Set(reflect.ValueOf(a).Field(i))
+				case tags.fieldType == "":
+					val, err := getFakedValue(v.Field(i).Interface(), opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					val = val.Convert(v.Field(i).Type())
+					v.Field(i).Set(val)
+				case tags.fieldType == SKIP:
+					item := originalDataVal.Field(i).Interface()
+					if v.CanSet() && item != nil {
+						v.Field(i).Set(reflect.ValueOf(item))
+					}
+				default:
+					err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+				}
+
+				if tags.unique {
+
+					if retry >= maxRetry {
+						return reflect.Value{}, fmt.Errorf(fakerErrors.ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
+					}
+
+					value := v.Field(i).Interface()
+					if slice.ContainsValue(uniqueValues[tags.fieldType], value) { // Retry if unique value already found
+						i--
+						retry++
+						continue
+					}
+					retry = 0
+					uniqueValues[tags.fieldType] = append(uniqueValues[tags.fieldType], value)
+				} else {
+					retry = 0
+				}
+
+			}
+			return v, nil
+		}
+
+	case reflect.String:
+		res, err := randomString(opts.RandomStringLength, *opts)
+		return reflect.ValueOf(res), err
+	case reflect.Slice:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeSlice(t, length, length)
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Array:
+		v := reflect.New(t).Elem()
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Int:
+		return reflect.ValueOf(randomInteger(opts)), nil
+	case reflect.Int8:
+		return reflect.ValueOf(int8(randomInteger(opts))), nil
+	case reflect.Int16:
+		return reflect.ValueOf(int16(randomInteger(opts))), nil
+	case reflect.Int32:
+		return reflect.ValueOf(int32(randomInteger(opts))), nil
+	case reflect.Int64:
+		return reflect.ValueOf(int64(randomInteger(opts))), nil
+	case reflect.Float32:
+		return reflect.ValueOf(float32(randomFloat(opts))), nil
+	case reflect.Float64:
+		return reflect.ValueOf(randomFloat(opts)), nil
+	case reflect.Bool:
+		val := rand.Intn(2) > 0
+		return reflect.ValueOf(val), nil
+
+	case reflect.Uint:
+		return reflect.ValueOf(uint(randomInteger(opts))), nil
+
+	case reflect.Uint8:
+		return reflect.ValueOf(uint8(randomInteger(opts))), nil
+
+	case reflect.Uint16:
+		return reflect.ValueOf(uint16(randomInteger(opts))), nil
+
+	case reflect.Uint32:
+		return reflect.ValueOf(uint32(randomInteger(opts))), nil
+
+	case reflect.Uint64:
+		return reflect.ValueOf(uint64(randomInteger(opts))), nil
+
+	case reflect.Map:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeMap(t)
+		for i := 0; i < length; i++ {
+			keyInstance := reflect.New(t.Key()).Elem().Interface()
+			key, err := getFakedValue(keyInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+
+			valueInstance := reflect.New(t.Elem()).Elem().Interface()
+			val, err := getFakedValue(valueInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Type().Elem())
+			v.SetMapIndex(key, val)
+		}
+		return v, nil
+	default:
+		err := fmt.Errorf("no support for kind %+v", t)
+		return reflect.Value{}, err
+	}
+
+}
+
+func getFakedValue3(a interface{}, opts *options.Options) (reflect.Value, error) {
+	t := reflect.TypeOf(a)
+	if t == nil {
+		if opts.IgnoreInterface {
+			return reflect.New(reflect.TypeOf(reflect.Struct)), nil
+		}
+		return reflect.Value{}, fmt.Errorf("interface{} not allowed")
+	}
+	if opts.MaxDepthOption.RecursionOutOfLimit(t) {
+		return reflect.Zero(t), nil
+	}
+	opts.MaxDepthOption.RememberType(t)
+	defer func() {
+		opts.MaxDepthOption.ForgetType(t)
+	}()
+	k := t.Kind()
+
+	switch k {
+	case reflect.Ptr:
+		v := reflect.New(t.Elem())
+		var val reflect.Value
+		var err error
+		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
+			val, err = getFakedValue(reflect.ValueOf(a).Elem().Interface(), opts)
+		} else {
+			val, err = getFakedValue(v.Elem().Interface(), opts)
+		}
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		v.Elem().Set(val.Convert(t.Elem()))
+		return v, nil
+	case reflect.Struct:
+		switch t.String() {
+		case "time.Time":
+			ft := time.Now().Add(time.Duration(rand.Int63()))
+			return reflect.ValueOf(ft), nil
+		default:
+			originalDataVal := reflect.ValueOf(a)
+			v := reflect.New(t).Elem()
+			retry := 0 // error if cannot generate unique value after maxRetry tries
+			for i := 0; i < v.NumField(); i++ {
+				if !v.Field(i).CanSet() {
+					continue // to avoid panic to set on unexported field in struct
+				}
+
+				if _, ok := opts.IgnoreFields[t.Field(i).Name]; ok {
+					continue
+				}
+
+				if p, ok := opts.FieldProviders[t.Field(i).Name]; ok {
+					val, err := p()
+					if err != nil {
+						return reflect.Value{}, fmt.Errorf("custom provider for field %s: %w", t.Field(i).Name, err)
+					}
+					v.Field(i).Set(reflect.ValueOf(val))
+					continue
+				}
+
+				tags := decodeTags(t, i)
+				switch {
+				case tags.keepOriginal:
+					zero, err := isZero(reflect.ValueOf(a).Field(i))
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					if zero {
+						err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+						if err != nil {
+							return reflect.Value{}, err
+						}
+						continue
+					}
+					v.Field(i).Set(reflect.ValueOf(a).Field(i))
+				case tags.fieldType == "":
+					val, err := getFakedValue(v.Field(i).Interface(), opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					val = val.Convert(v.Field(i).Type())
+					v.Field(i).Set(val)
+				case tags.fieldType == SKIP:
+					item := originalDataVal.Field(i).Interface()
+					if v.CanSet() && item != nil {
+						v.Field(i).Set(reflect.ValueOf(item))
+					}
+				default:
+					err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+				}
+
+				if tags.unique {
+
+					if retry >= maxRetry {
+						return reflect.Value{}, fmt.Errorf(fakerErrors.ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
+					}
+
+					value := v.Field(i).Interface()
+					if slice.ContainsValue(uniqueValues[tags.fieldType], value) { // Retry if unique value already found
+						i--
+						retry++
+						continue
+					}
+					retry = 0
+					uniqueValues[tags.fieldType] = append(uniqueValues[tags.fieldType], value)
+				} else {
+					retry = 0
+				}
+
+			}
+			return v, nil
+		}
+
+	case reflect.String:
+		res, err := randomString(opts.RandomStringLength, *opts)
+		return reflect.ValueOf(res), err
+	case reflect.Slice:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeSlice(t, length, length)
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Array:
+		v := reflect.New(t).Elem()
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Int:
+		return reflect.ValueOf(randomInteger(opts)), nil
+	case reflect.Int8:
+		return reflect.ValueOf(int8(randomInteger(opts))), nil
+	case reflect.Int16:
+		return reflect.ValueOf(int16(randomInteger(opts))), nil
+	case reflect.Int32:
+		return reflect.ValueOf(int32(randomInteger(opts))), nil
+	case reflect.Int64:
+		return reflect.ValueOf(int64(randomInteger(opts))), nil
+	case reflect.Float32:
+		return reflect.ValueOf(float32(randomFloat(opts))), nil
+	case reflect.Float64:
+		return reflect.ValueOf(randomFloat(opts)), nil
+	case reflect.Bool:
+		val := rand.Intn(2) > 0
+		return reflect.ValueOf(val), nil
+
+	case reflect.Uint:
+		return reflect.ValueOf(uint(randomInteger(opts))), nil
+
+	case reflect.Uint8:
+		return reflect.ValueOf(uint8(randomInteger(opts))), nil
+
+	case reflect.Uint16:
+		return reflect.ValueOf(uint16(randomInteger(opts))), nil
+
+	case reflect.Uint32:
+		return reflect.ValueOf(uint32(randomInteger(opts))), nil
+
+	case reflect.Uint64:
+		return reflect.ValueOf(uint64(randomInteger(opts))), nil
+
+	case reflect.Map:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeMap(t)
+		for i := 0; i < length; i++ {
+			keyInstance := reflect.New(t.Key()).Elem().Interface()
+			key, err := getFakedValue(keyInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+
+			valueInstance := reflect.New(t.Elem()).Elem().Interface()
+			val, err := getFakedValue(valueInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Type().Elem())
+			v.SetMapIndex(key, val)
+		}
+		return v, nil
+	default:
+		err := fmt.Errorf("no support for kind %+v", t)
+		return reflect.Value{}, err
+	}
+
+}
+
+func getFakedValue4(a interface{}, opts *options.Options) (reflect.Value, error) {
+	t := reflect.TypeOf(a)
+	if t == nil {
+		if opts.IgnoreInterface {
+			return reflect.New(reflect.TypeOf(reflect.Struct)), nil
+		}
+		return reflect.Value{}, fmt.Errorf("interface{} not allowed")
+	}
+	if opts.MaxDepthOption.RecursionOutOfLimit(t) {
+		return reflect.Zero(t), nil
+	}
+	opts.MaxDepthOption.RememberType(t)
+	defer func() {
+		opts.MaxDepthOption.ForgetType(t)
+	}()
+	k := t.Kind()
+
+	switch k {
+	case reflect.Ptr:
+		v := reflect.New(t.Elem())
+		var val reflect.Value
+		var err error
+		if a != reflect.Zero(reflect.TypeOf(a)).Interface() {
+			val, err = getFakedValue(reflect.ValueOf(a).Elem().Interface(), opts)
+		} else {
+			val, err = getFakedValue(v.Elem().Interface(), opts)
+		}
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		v.Elem().Set(val.Convert(t.Elem()))
+		return v, nil
+	case reflect.Struct:
+		switch t.String() {
+		case "time.Time":
+			ft := time.Now().Add(time.Duration(rand.Int63()))
+			return reflect.ValueOf(ft), nil
+		default:
+			originalDataVal := reflect.ValueOf(a)
+			v := reflect.New(t).Elem()
+			retry := 0 // error if cannot generate unique value after maxRetry tries
+			for i := 0; i < v.NumField(); i++ {
+				if !v.Field(i).CanSet() {
+					continue // to avoid panic to set on unexported field in struct
+				}
+
+				if _, ok := opts.IgnoreFields[t.Field(i).Name]; ok {
+					continue
+				}
+
+				if p, ok := opts.FieldProviders[t.Field(i).Name]; ok {
+					val, err := p()
+					if err != nil {
+						return reflect.Value{}, fmt.Errorf("custom provider for field %s: %w", t.Field(i).Name, err)
+					}
+					v.Field(i).Set(reflect.ValueOf(val))
+					continue
+				}
+
+				tags := decodeTags(t, i)
+				switch {
+				case tags.keepOriginal:
+					zero, err := isZero(reflect.ValueOf(a).Field(i))
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					if zero {
+						err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+						if err != nil {
+							return reflect.Value{}, err
+						}
+						continue
+					}
+					v.Field(i).Set(reflect.ValueOf(a).Field(i))
+				case tags.fieldType == "":
+					val, err := getFakedValue(v.Field(i).Interface(), opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					val = val.Convert(v.Field(i).Type())
+					v.Field(i).Set(val)
+				case tags.fieldType == SKIP:
+					item := originalDataVal.Field(i).Interface()
+					if v.CanSet() && item != nil {
+						v.Field(i).Set(reflect.ValueOf(item))
+					}
+				default:
+					err := setDataWithTag(v.Field(i).Addr(), tags.fieldType, *opts)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+				}
+
+				if tags.unique {
+
+					if retry >= maxRetry {
+						return reflect.Value{}, fmt.Errorf(fakerErrors.ErrUniqueFailure, reflect.TypeOf(a).Field(i).Name)
+					}
+
+					value := v.Field(i).Interface()
+					if slice.ContainsValue(uniqueValues[tags.fieldType], value) { // Retry if unique value already found
+						i--
+						retry++
+						continue
+					}
+					retry = 0
+					uniqueValues[tags.fieldType] = append(uniqueValues[tags.fieldType], value)
+				} else {
+					retry = 0
+				}
+
+			}
+			return v, nil
+		}
+
+	case reflect.String:
+		res, err := randomString(opts.RandomStringLength, *opts)
+		return reflect.ValueOf(res), err
+	case reflect.Slice:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeSlice(t, length, length)
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Array:
+		v := reflect.New(t).Elem()
+		for i := 0; i < v.Len(); i++ {
+			val, err := getFakedValue(v.Index(i).Interface(), opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Index(i).Type())
+			v.Index(i).Set(val)
+		}
+		return v, nil
+	case reflect.Int:
+		return reflect.ValueOf(randomInteger(opts)), nil
+	case reflect.Int8:
+		return reflect.ValueOf(int8(randomInteger(opts))), nil
+	case reflect.Int16:
+		return reflect.ValueOf(int16(randomInteger(opts))), nil
+	case reflect.Int32:
+		return reflect.ValueOf(int32(randomInteger(opts))), nil
+	case reflect.Int64:
+		return reflect.ValueOf(int64(randomInteger(opts))), nil
+	case reflect.Float32:
+		return reflect.ValueOf(float32(randomFloat(opts))), nil
+	case reflect.Float64:
+		return reflect.ValueOf(randomFloat(opts)), nil
+	case reflect.Bool:
+		val := rand.Intn(2) > 0
+		return reflect.ValueOf(val), nil
+
+	case reflect.Uint:
+		return reflect.ValueOf(uint(randomInteger(opts))), nil
+
+	case reflect.Uint8:
+		return reflect.ValueOf(uint8(randomInteger(opts))), nil
+
+	case reflect.Uint16:
+		return reflect.ValueOf(uint16(randomInteger(opts))), nil
+
+	case reflect.Uint32:
+		return reflect.ValueOf(uint32(randomInteger(opts))), nil
+
+	case reflect.Uint64:
+		return reflect.ValueOf(uint64(randomInteger(opts))), nil
+
+	case reflect.Map:
+		length := randomSliceAndMapSize(*opts)
+		if opts.SetSliceMapNilIfLenZero && length == 0 {
+			return reflect.Zero(t), nil
+		}
+		v := reflect.MakeMap(t)
+		for i := 0; i < length; i++ {
+			keyInstance := reflect.New(t.Key()).Elem().Interface()
+			key, err := getFakedValue(keyInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+
+			valueInstance := reflect.New(t.Elem()).Elem().Interface()
+			val, err := getFakedValue(valueInstance, opts)
+			if err != nil {
+				return reflect.Value{}, err
+			}
+			val = val.Convert(v.Type().Elem())
+			v.SetMapIndex(key, val)
+		}
+		return v, nil
+	default:
+		err := fmt.Errorf("no support for kind %+v", t)
+		return reflect.Value{}, err
+	}
+
+}
+
 func isZero(field reflect.Value) (bool, error) {
 	if field.Kind() == reflect.Map {
 		return field.Len() == 0, nil
